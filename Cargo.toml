@@ -1,0 +1,15 @@
+[package]
+name = "multi-hart-critical-section"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+critical-section-multi-hart = ["critical-section/restore-state-bool"]
+
+[dependencies]
+critical-section = { version = "1.2.0", features = ["restore-state-bool"] } 
+riscv = "0.13.0"
+
+[lib]
+test = false
+harness = false

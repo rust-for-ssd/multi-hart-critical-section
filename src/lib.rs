@@ -22,7 +22,7 @@ unsafe impl Impl for MultiHartCriticalSection {
             unsafe { core::mem::transmute::<_, riscv::register::mstatus::Mstatus>(mstatus) }.mie();
 
         while let Err(_) =
-            SPINLOCK.compare_exchange(UNLOCKED, LOCKED, Ordering::Acquire, Ordering::Relaxed)
+            SPINLOCK.compare_exchange(UNLOCKED, LOCKED, Ordering::SeqCst, Ordering::Relaxed)
         {
             core::hint::spin_loop();
         }
@@ -31,7 +31,7 @@ unsafe impl Impl for MultiHartCriticalSection {
     }
 
     unsafe fn release(was_active: RawRestoreState) {
-        SPINLOCK.store(UNLOCKED, Ordering::Release);
+        SPINLOCK.store(UNLOCKED, Ordering::SeqCst);
 
         // Re-enable interrupts only if they were enabled before the critical section.
         if was_active {

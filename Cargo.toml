@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-critical-section-multi-hart = ["critical-section/restore-state-bool"]
+critical-section-multi-hart = ["critical-section/restore-state-usize"]
 
 [dependencies]
-critical-section = { version = "1.2.0", features = ["restore-state-bool"] } 
+critical-section = { version = "1.2.0", features = ["restore-state-usize"] } 
 riscv = "0.13.0"
 
 [lib]

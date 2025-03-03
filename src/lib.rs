@@ -1,12 +1,11 @@
 #![no_std]
 #![no_main]
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use critical_section::{Impl, RawRestoreState, set_impl};
 
-const LOCKED: bool = true;
-const UNLOCKED: bool = false;
-static SPINLOCK: AtomicBool = AtomicBool::new(UNLOCKED);
+const UNLOCKED: usize = usize::max_value();
+static SPINLOCK: AtomicUsize = AtomicUsize::new(UNLOCKED);
 
 struct MultiHartCriticalSection;
 set_impl!(MultiHartCriticalSection);
@@ -16,28 +15,42 @@ unsafe impl Impl for MultiHartCriticalSection {
         // Disable interrupts on the current hart by clearing MIE in mstatus.
         let mut mstatus: usize;
         unsafe {
-            core::arch::asm!("csrrci {}, mstatus, 0b1000", out(reg) mstatus);
+            core::arch::asm!("csrrci {}, mstatus, 0b1010", out(reg) mstatus);
         }
-        let mie_set =
-            unsafe { core::mem::transmute::<_, riscv::register::mstatus::Mstatus>(mstatus) }.mie();
-
-        while let Err(_) =
-            SPINLOCK.compare_exchange(UNLOCKED, LOCKED, Ordering::SeqCst, Ordering::Relaxed)
-        {
-            core::hint::spin_loop();
+        let mstatus =
+            unsafe { core::mem::transmute::<_, riscv::register::mstatus::Mstatus>(mstatus) }.bits();
+        let hart_id = riscv::register::mhartid::read();
+        if hart_id != SPINLOCK.load(Ordering::SeqCst) {
+            while let Err(_) =
+                SPINLOCK.compare_exchange(UNLOCKED, hart_id, Ordering::SeqCst, Ordering::Relaxed)
+            {
+                // core::hint::spin_loop();
+            }
         }
 
-        mie_set
+        mstatus
     }
 
-    unsafe fn release(was_active: RawRestoreState) {
-        SPINLOCK.store(UNLOCKED, Ordering::SeqCst);
+    unsafe fn release(mstatus: RawRestoreState) {
+        let hart_id = riscv::register::mhartid::read();
+        let _ = SPINLOCK.compare_exchange(hart_id, UNLOCKED, Ordering::SeqCst, Ordering::Relaxed);
 
-        // Re-enable interrupts only if they were enabled before the critical section.
-        if was_active {
-            unsafe {
-                riscv::interrupt::enable();
-            }
+        let imm = mstatus & 0b1111;
+
+        match imm {
+            0b1010 => unsafe {
+                core::arch::asm!("csrrsi {0}, mstatus, 0b1010", in(reg) mstatus);
+            },
+            0b1000 => unsafe {
+                core::arch::asm!("csrrsi {0}, mstatus, 0b1000", in(reg) mstatus);
+            },
+            0b0010 => unsafe {
+                core::arch::asm!("csrrsi {0}, mstatus, 0b0010", in(reg) mstatus);
+            },
+            0b0000 => unsafe {
+                core::arch::asm!("csrrsi {0}, mstatus, 0b0000", in(reg) mstatus);
+            },
+            _ => panic!("Didn't match any in critical section!"),
         }
     }
 }

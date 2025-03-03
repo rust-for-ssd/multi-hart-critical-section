@@ -1,11 +1,15 @@
 #![no_std]
 #![no_main]
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use critical_section::{Impl, RawRestoreState, set_impl};
 
-const UNLOCKED: usize = usize::max_value();
-static SPINLOCK: AtomicUsize = AtomicUsize::new(UNLOCKED);
+const UNLOCKED: bool = false;
+const LOCKED: bool = true;
+static SPINLOCK: AtomicBool = AtomicBool::new(UNLOCKED);
+
+#[cfg(debug_assertions)]
+static COUNTER: core::sync::atomic::AtomicIsize = core::sync::atomic::AtomicIsize::new(0);
 
 struct MultiHartCriticalSection;
 set_impl!(MultiHartCriticalSection);
@@ -17,24 +21,30 @@ unsafe impl Impl for MultiHartCriticalSection {
         unsafe {
             core::arch::asm!("csrrci {}, mstatus, 0b1010", out(reg) mstatus);
         }
-        let mstatus =
-            unsafe { core::mem::transmute::<_, riscv::register::mstatus::Mstatus>(mstatus) }.bits();
-        let hart_id = riscv::register::mhartid::read();
-        if hart_id != SPINLOCK.load(Ordering::SeqCst) {
-            while let Err(_) =
-                SPINLOCK.compare_exchange(UNLOCKED, hart_id, Ordering::SeqCst, Ordering::Relaxed)
-            {
-                // core::hint::spin_loop();
-            }
+
+        while let Err(_) =
+            SPINLOCK.compare_exchange(UNLOCKED, LOCKED, Ordering::Acquire, Ordering::Relaxed)
+        {
+            core::hint::spin_loop();
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(COUNTER.load(Ordering::SeqCst) == 0);
+            COUNTER.fetch_add(1, Ordering::SeqCst);
         }
 
         mstatus
     }
 
     unsafe fn release(mstatus: RawRestoreState) {
-        let hart_id = riscv::register::mhartid::read();
-        let _ = SPINLOCK.compare_exchange(hart_id, UNLOCKED, Ordering::SeqCst, Ordering::Relaxed);
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(COUNTER.load(Ordering::SeqCst) == 1);
+            COUNTER.fetch_sub(1, Ordering::SeqCst);
+        }
 
+        SPINLOCK.store(UNLOCKED, Ordering::Release);
         let imm = mstatus & 0b1111;
 
         match imm {
